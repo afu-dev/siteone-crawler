@@ -599,6 +599,8 @@ impl Manager {
                 options.show_inline_criticals,
                 options.show_inline_warnings,
                 options.hide_columns.clone(),
+                options.console_url_rows,
+                options.console_progress_interval,
                 options.workers as usize,
                 options.memory_limit.clone(),
                 options.output_type == OutputType::Text, // print_to_output

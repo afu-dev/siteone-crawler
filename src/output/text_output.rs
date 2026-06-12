@@ -12,7 +12,7 @@ use crate::output::output::{BasicStats, CrawlerInfo, Output};
 use crate::output::output_type::OutputType;
 use crate::scoring::ci_gate::CiGateResult;
 use crate::scoring::quality_score::QualityScores;
-use crate::types::ContentTypeId;
+use crate::types::{ConsoleUrlRows, ContentTypeId};
 use crate::utils;
 
 pub struct TextOutput {
@@ -44,12 +44,17 @@ pub struct TextOutput {
     show_inline_criticals: bool,
     show_inline_warnings: bool,
     hide_columns: Vec<String>,
+    console_url_rows: ConsoleUrlRows,
+    console_progress_interval: u64,
     workers: usize,
     memory_limit: String,
     disable_animation: bool,
 
     /// Cached computed URL column size
     cached_url_column_size: Option<usize>,
+
+    /// Last time a progress heartbeat line was printed (used when URL rows are suppressed)
+    last_progress_heartbeat: Option<std::time::Instant>,
 }
 
 impl TextOutput {
@@ -65,6 +70,8 @@ impl TextOutput {
         show_inline_criticals: bool,
         show_inline_warnings: bool,
         hide_columns: Vec<String>,
+        console_url_rows: ConsoleUrlRows,
+        console_progress_interval: u64,
         workers: usize,
         memory_limit: String,
         print_to_output: bool,
@@ -108,10 +115,13 @@ impl TextOutput {
             show_inline_criticals,
             show_inline_warnings,
             hide_columns,
+            console_url_rows,
+            console_progress_interval,
             workers,
             memory_limit,
             disable_animation,
             cached_url_column_size: None,
+            last_progress_heartbeat: None,
         }
     }
 
@@ -138,12 +148,57 @@ impl TextOutput {
     }
 
     fn add_to_output(&mut self, output: &str) {
-        if self.print_to_output {
+        self.add_to_output_conditional(output, true);
+    }
+
+    /// Append to the accumulated output text; print to console only when `print_to_console`
+    /// is true (per-URL rows can be suppressed on console while staying in saved reports).
+    fn add_to_output_conditional(&mut self, output: &str, print_to_console: bool) {
+        if self.print_to_output && print_to_console {
             print!("{}", output);
             // Flush stdout to ensure immediate display
             let _ = std::io::stdout().flush();
         }
         self.output_text.push_str(output);
+    }
+
+    /// Whether a per-URL row with the given status code is printed to console.
+    fn is_row_visible(&self, status: i32) -> bool {
+        match self.console_url_rows {
+            ConsoleUrlRows::All => true,
+            ConsoleUrlRows::Errors => !(200..400).contains(&status),
+            ConsoleUrlRows::None => false,
+        }
+    }
+
+    /// Print a periodic progress heartbeat line to console when URL rows are suppressed.
+    /// Console-only: saved text reports already contain all rows.
+    fn print_progress_heartbeat(&mut self, progress_status: &str) {
+        if !self.print_to_output || self.console_progress_interval == 0 {
+            return;
+        }
+
+        let due = match self.last_progress_heartbeat {
+            Some(last) => last.elapsed().as_secs() >= self.console_progress_interval,
+            None => true,
+        };
+        if !due {
+            return;
+        }
+
+        let parts: Vec<&str> = progress_status.splitn(2, '/').collect();
+        let done: usize = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let total: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+        let percent = done as f64 / total as f64 * 100.0;
+
+        let segments = 10usize;
+        let filled = (((done as f64 / total as f64) * segments as f64).round() as usize).min(segments);
+        let bar = format!("|{}{}|", ">".repeat(filled), " ".repeat(segments - filled));
+
+        println!("Progress: {}/{} ({:.1} %) {}", done, total, percent, bar);
+        let _ = std::io::stdout().flush();
+
+        self.last_progress_heartbeat = Some(std::time::Instant::now());
     }
 
     pub fn get_output_text(&self) -> &str {
@@ -467,11 +522,16 @@ impl Output for TextOutput {
         }
         output.push_str(&format!("{}\n", extra_headers_content));
 
+        let row_visible = self.is_row_visible(status);
         if !extra_new_line.is_empty() {
             let combined = format!("{}{}\n", output, extra_new_line.trim_end());
-            self.add_to_output(&combined);
+            self.add_to_output_conditional(&combined, row_visible);
         } else {
-            self.add_to_output(&output);
+            self.add_to_output_conditional(&output, row_visible);
+        }
+
+        if !row_visible {
+            self.print_progress_heartbeat(progress_status);
         }
     }
 
@@ -862,4 +922,104 @@ fn format_score_line(
     let colored = utils::get_color_text(&content, cat.console_color(), false);
 
     format!("\u{2551}{}{}\u{2551}\n", colored, " ".repeat(padding))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_output(console_url_rows: ConsoleUrlRows) -> TextOutput {
+        let crawler_info = CrawlerInfo {
+            name: "SiteOne Crawler".to_string(),
+            version: "0.0.0".to_string(),
+            executed_at: "2026-01-01 00:00:00".to_string(),
+            command: "test".to_string(),
+            hostname: "localhost".to_string(),
+            final_user_agent: "test-agent".to_string(),
+            url: "https://example.com/".to_string(),
+            device: "desktop".to_string(),
+            workers: 1,
+        };
+        TextOutput::new(
+            crawler_info,
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            None,
+            false,
+            false,
+            Vec::new(),
+            console_url_rows,
+            10,
+            1,
+            "2048M".to_string(),
+            false, // print_to_output: never write to real stdout in tests
+            true,
+        )
+    }
+
+    fn add_row(output: &mut TextOutput, url: &str, status: i32) {
+        output.add_table_row(
+            &HashMap::new(),
+            url,
+            status,
+            0.123,
+            1024,
+            ContentTypeId::Html as i32,
+            &HashMap::new(),
+            "1/2",
+            0,
+            None,
+        );
+    }
+
+    #[test]
+    fn row_visibility_all_mode() {
+        let out = make_output(ConsoleUrlRows::All);
+        for status in [200, 301, 404, 500, -1, -2] {
+            assert!(out.is_row_visible(status), "status {} should be visible", status);
+        }
+    }
+
+    #[test]
+    fn row_visibility_errors_mode() {
+        let out = make_output(ConsoleUrlRows::Errors);
+        for status in [200, 204, 301, 304, 399] {
+            assert!(!out.is_row_visible(status), "status {} should be hidden", status);
+        }
+        for status in [400, 404, 500, 503, -1, -2, -4] {
+            assert!(out.is_row_visible(status), "status {} should be visible", status);
+        }
+    }
+
+    #[test]
+    fn row_visibility_none_mode() {
+        let out = make_output(ConsoleUrlRows::None);
+        for status in [200, 301, 404, 500, -1] {
+            assert!(!out.is_row_visible(status), "status {} should be hidden", status);
+        }
+    }
+
+    #[test]
+    fn suppressed_rows_are_kept_in_output_text() {
+        let mut out = make_output(ConsoleUrlRows::None);
+        add_row(&mut out, "https://example.com/page-1", 200);
+        add_row(&mut out, "https://example.com/page-2", 404);
+
+        let text = out.get_output_text();
+        assert!(
+            text.contains("/page-1"),
+            "saved text report must contain suppressed OK row"
+        );
+        assert!(
+            text.contains("/page-2"),
+            "saved text report must contain suppressed error row"
+        );
+        assert!(
+            !text.contains("Progress:"),
+            "heartbeat lines must not land in the saved text report"
+        );
+    }
 }

@@ -246,3 +246,69 @@ impl fmt::Display for OutputType {
         f.write_str(self.as_str())
     }
 }
+
+// ---------------------------------------------------------------------------
+// ConsoleUrlRows
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConsoleUrlRows {
+    All,
+    Errors,
+    None,
+}
+
+impl ConsoleUrlRows {
+    pub fn from_text(text: &str) -> Result<Self, CrawlerError> {
+        match text.trim().to_lowercase().as_str() {
+            "all" => Ok(ConsoleUrlRows::All),
+            "errors" => Ok(ConsoleUrlRows::Errors),
+            "none" => Ok(ConsoleUrlRows::None),
+            other => Err(CrawlerError::Config(format!(
+                "Unknown console URL rows mode '{}'. Supported values are: {}",
+                other,
+                Self::available_text_types().join(", ")
+            ))),
+        }
+    }
+
+    pub fn available_text_types() -> Vec<&'static str> {
+        vec!["all", "errors", "none"]
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConsoleUrlRows::All => "all",
+            ConsoleUrlRows::Errors => "errors",
+            ConsoleUrlRows::None => "none",
+        }
+    }
+}
+
+impl fmt::Display for ConsoleUrlRows {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_url_rows_from_text_valid() {
+        assert_eq!(ConsoleUrlRows::from_text("all").unwrap(), ConsoleUrlRows::All);
+        assert_eq!(ConsoleUrlRows::from_text("errors").unwrap(), ConsoleUrlRows::Errors);
+        assert_eq!(ConsoleUrlRows::from_text("none").unwrap(), ConsoleUrlRows::None);
+        assert_eq!(ConsoleUrlRows::from_text(" Errors ").unwrap(), ConsoleUrlRows::Errors);
+        assert_eq!(ConsoleUrlRows::from_text("NONE").unwrap(), ConsoleUrlRows::None);
+    }
+
+    #[test]
+    fn console_url_rows_from_text_invalid() {
+        let err = ConsoleUrlRows::from_text("everything").unwrap_err();
+        assert!(matches!(err, CrawlerError::Config(_)));
+        assert!(err.to_string().contains("all, errors, none"));
+    }
+}

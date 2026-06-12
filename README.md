@@ -482,6 +482,8 @@ For a clearer list, I recommend going to the documentation: 🌐 https://crawler
 | `--show-scheme-and-host` | On text output, show scheme and host also for origin domain URLs. |
 | `--hide-progress-bar` | Hide progress bar visible in text and JSON output for more compact view. |
 | `--hide-columns=<list>` | Hide specified columns from the progress table. Comma-separated list of column names:<br>`type`, `time`, `size`, `cache`. Example: `--hide-columns=cache` or `--hide-columns=cache,type`. |
+| `--console-url-rows=<val>` | Per-URL rows printed to console during crawl: `all` (default), `errors` (only non-2xx/3xx rows)<br>or `none`. Useful in CI to keep job logs small (e.g. GitLab CI log size limits) while the<br>end-of-crawl summary stays visible. Saved text reports (`--output-text-file`) always contain all rows. |
+| `--console-progress-interval=<num>` | Interval in seconds for progress heartbeat lines (`Progress: 23224/59284 (39.2 %)`) printed<br>to console when `--console-url-rows` is `errors` or `none`. Default is `10`, `0` disables. |
 | `--no-color` | Disable colored output. |
 | `--force-color` | Force colored output regardless of support detection. |
 | `--show-inline-criticals` | Show criticals from the analyzer directly in the URL table. |

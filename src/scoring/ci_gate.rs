@@ -219,6 +219,8 @@ mod tests {
             do_not_truncate_url: false,
             hide_progress_bar: false,
             hide_columns: Vec::new(),
+            console_url_rows: crate::types::ConsoleUrlRows::All,
+            console_progress_interval: 10,
             no_color: false,
             force_color: false,
             console_width: None,

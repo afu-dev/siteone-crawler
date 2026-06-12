@@ -7,7 +7,7 @@ use regex::Regex;
 use crate::debugger;
 use crate::error::CrawlerError;
 use crate::extra_column::ExtraColumn;
-use crate::types::{DeviceType, OutputType};
+use crate::types::{ConsoleUrlRows, DeviceType, OutputType};
 
 use super::group::OptionGroup;
 use super::option::{CrawlerOption, OptionValue};
@@ -90,6 +90,8 @@ pub struct CoreOptions {
     pub do_not_truncate_url: bool,
     pub hide_progress_bar: bool,
     pub hide_columns: Vec<String>,
+    pub console_url_rows: ConsoleUrlRows,
+    pub console_progress_interval: u64,
     pub no_color: bool,
     pub force_color: bool,
     pub console_width: Option<i64>,
@@ -272,6 +274,8 @@ impl CoreOptions {
             do_not_truncate_url: false,
             hide_progress_bar: false,
             hide_columns: Vec::new(),
+            console_url_rows: ConsoleUrlRows::All,
+            console_progress_interval: 10,
             no_color: false,
             force_color: false,
             console_width: None,
@@ -663,6 +667,21 @@ impl CoreOptions {
             "hideColumns" => {
                 if let Some(s) = value.as_str() {
                     self.hide_columns = s.split(',').map(|c| c.trim().to_lowercase()).collect();
+                }
+            }
+            "consoleUrlRows" => {
+                if let Some(s) = value.as_str() {
+                    self.console_url_rows = ConsoleUrlRows::from_text(s)?;
+                }
+            }
+            "consoleProgressInterval" => {
+                if let Some(n) = value.as_int() {
+                    if n < 0 {
+                        return Err(CrawlerError::Config(
+                            "Option --console-progress-interval must be >= 0 (0 disables the heartbeat)".to_string(),
+                        ));
+                    }
+                    self.console_progress_interval = n as u64;
                 }
             }
             "noColor" => {
@@ -1449,6 +1468,16 @@ pub fn get_options() -> Options {
                 "--hide-columns", Some("-hc"), "hideColumns", OptionType::String, false,
                 "Hide specified columns from the progress table. Comma-separated list: type, time, size, cache.",
                 None, true, false, None,
+            ),
+            CrawlerOption::new(
+                "--console-url-rows", Some("-cur"), "consoleUrlRows", OptionType::String, false,
+                "Per-URL rows printed to console during crawl: `all` (default), `errors` (only non-2xx/3xx) or `none`. Useful in CI to keep logs small. Saved text reports always contain all rows.",
+                Some("all"), false, false, None,
+            ),
+            CrawlerOption::new(
+                "--console-progress-interval", Some("-cpi"), "consoleProgressInterval", OptionType::Int, false,
+                "Interval in seconds for progress heartbeat lines printed to console when `--console-url-rows` is `errors` or `none`. Use `0` to disable.",
+                Some("10"), false, false, None,
             ),
             CrawlerOption::new(
                 "--no-color", Some("-nc"), "noColor", OptionType::Bool, false,
@@ -2763,6 +2792,8 @@ mod tests {
             do_not_truncate_url: false,
             hide_progress_bar: false,
             hide_columns: Vec::new(),
+            console_url_rows: ConsoleUrlRows::All,
+            console_progress_interval: 10,
             no_color: false,
             force_color: false,
             console_width: None,
@@ -3079,5 +3110,56 @@ mod tests {
         opts.apply_option_value("offlineExportPreserveUrls", &OptionValue::Bool(true))
             .unwrap();
         assert!(opts.offline_export_preserve_urls);
+    }
+
+    #[test]
+    fn apply_console_url_rows() {
+        let mut opts = make_default_core_options();
+        assert_eq!(opts.console_url_rows, ConsoleUrlRows::All);
+        opts.apply_option_value("consoleUrlRows", &OptionValue::Str("errors".into()))
+            .unwrap();
+        assert_eq!(opts.console_url_rows, ConsoleUrlRows::Errors);
+        opts.apply_option_value("consoleUrlRows", &OptionValue::Str("none".into()))
+            .unwrap();
+        assert_eq!(opts.console_url_rows, ConsoleUrlRows::None);
+    }
+
+    #[test]
+    fn apply_console_url_rows_invalid_value() {
+        let mut opts = make_default_core_options();
+        let result = opts.apply_option_value("consoleUrlRows", &OptionValue::Str("verbose".into()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn apply_console_progress_interval() {
+        let mut opts = make_default_core_options();
+        assert_eq!(opts.console_progress_interval, 10);
+        opts.apply_option_value("consoleProgressInterval", &OptionValue::Int(60))
+            .unwrap();
+        assert_eq!(opts.console_progress_interval, 60);
+        opts.apply_option_value("consoleProgressInterval", &OptionValue::Int(0))
+            .unwrap();
+        assert_eq!(opts.console_progress_interval, 0);
+    }
+
+    #[test]
+    fn apply_console_progress_interval_negative_errors() {
+        let mut opts = make_default_core_options();
+        let result = opts.apply_option_value("consoleProgressInterval", &OptionValue::Int(-5));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_argv_console_url_rows() {
+        let argv = vec![
+            "siteone-crawler".to_string(),
+            "--url=https://example.com".to_string(),
+            "--console-url-rows=errors".to_string(),
+            "--console-progress-interval=30".to_string(),
+        ];
+        let opts = parse_argv(&argv).unwrap();
+        assert_eq!(opts.console_url_rows, ConsoleUrlRows::Errors);
+        assert_eq!(opts.console_progress_interval, 30);
     }
 }
