@@ -1,6 +1,6 @@
 [package]
 name = "siteone-crawler"
-version = "2.4.0-afu"
+version = "2.4.1-afu"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Ján Regeš <jan.reges@siteone.cz>"]
